@@ -20,23 +20,55 @@ POST_FACEBOOK = os.getenv("POST_FACEBOOK", "1") == "1"
 POST_INSTAGRAM = os.getenv("POST_INSTAGRAM", "1") == "1"
 COOLDOWN_HOURS = float(os.getenv("COOLDOWN_HOURS", "3"))  # a dropped stream that restarts will not re-post
 
-OPENERS = [
-    "WE ARE LIVE AND IT IS ALREADY UNHINGED",
-    "I'M LIVE!!! Get in here before something eats me",
-    "LIVE NOW and I have zero chill",
-    "The stream is LIVE. Come watch me panic in real time",
-]
+# Games that get the scary treatment. Anything else gets a general gaming post.
+HORROR = [g.strip().lower() for g in os.getenv(
+    "HORROR_GAMES", "horror,phasmophobia,silent hill,resident evil,dead by daylight,outlast,until dawn,"
+    "lethal company,five nights,alan wake,amnesia,alien isolation,forest,content warning,demonologist,"
+    "dead space,little nightmares,layers of fear,visage,fears to fathom,the quarry,man of medan,devour,"
+    "callisto protocol,cry of fear,white noise,nightmare,haunted,poppy playtime,fatal frame,evil within,"
+    "the mortuary assistant,fear the spotlight,ghost watchers,sker ritual").split(",") if g.strip()]
+OTHER = [g.strip().lower() for g in os.getenv(
+    "NON_HORROR_GAMES", "grand theft auto,helldivers,rainbow six,marvel rivals,overwatch,fortnite,valorant,"
+    "apex legends,call of duty,minecraft,rocket league,league of legends,mario,zelda,pokemon").split(",") if g.strip()]
+GENERIC_CATEGORIES = {"", "just chatting", "irl", "special events", "talk shows & podcasts", "software and game development"}
+
+HORROR_OPENERS = ["WE ARE LIVE and I should NOT be playing this alone",
+                  "LIVE NOW and the dread is real",
+                  "I'M LIVE!!! Get in here before something eats me",
+                  "The stream is LIVE. Come watch me panic in real time"]
+OTHER_OPENERS = ["LIVE NOW and the chaos is real",
+                 "I'M LIVE!!! Come watch me lose it",
+                 "The stream is LIVE and I have zero chill",
+                 "WE ARE LIVE. Get in here"]
 
 
 def tag(s):
     return "#" + re.sub(r"[^A-Za-z0-9]", "", s)
 
 
-def hashtags(game):
-    base = ["#HeadGeek81", "#LiveNow", "#TwitchStreamer", "#Twitch", "#HorrorGaming", "#HorrorGames",
-            "#ScaryGames", "#LiveStreamer", "#GamerCommunity", "#SmallStreamer", "#Gaming"]
+def is_horror(text):
+    t = text.lower()
+    return any(h in t for h in HORROR) and not any(o in t for o in OTHER)
+
+
+def find_game(stream):
+    """Use Twitch's game category. If it is blank or generic, look for a known game name in the stream title."""
+    cat = (stream.get("game_name") or "").strip()
+    if cat.lower() not in GENERIC_CATEGORIES:
+        return cat
+    title = (stream.get("title") or "").lower()
+    for name in HORROR + OTHER:
+        if name in title and name != "horror" and len(name) > 4:
+            return name.title()
+    return ""
+
+
+def hashtags(game, horror):
+    base = ["#HeadGeek81", "#LiveNow", "#TwitchStreamer", "#Twitch", "#LiveStreamer", "#GamerCommunity", "#SmallStreamer"]
+    scary = ["#HorrorGaming", "#HorrorGames", "#ScaryGames"]
+    other = ["#Gaming", "#GamingCommunity", "#FunnyGaming"]
     out, seen = [], set()
-    for t in ([tag(game)] if game else []) + base:
+    for t in ([tag(game)] if game else []) + (scary if horror else other) + base:
         if len(t) > 1 and t.lower() not in seen and len(out) < 12:
             seen.add(t.lower())
             out.append(t)
@@ -44,10 +76,18 @@ def hashtags(game):
 
 
 def captions(title, game):
-    opener = random.choice(OPENERS)
-    body = f"{opener}\n\n{title}\nPlaying {game} and absolutely not handling it well.\n\n"
-    fb = f"🔴 {body}Come hang out on Twitch: https://{LINK}\n\n{hashtags(game)}"
-    ig = f"🔴 {body}Watch LIVE on Twitch: {LINK} (link in bio)\n\n{hashtags(game)}"
+    horror = is_horror(f"{game} {title}")
+    opener = random.choice(HORROR_OPENERS if horror else OTHER_OPENERS)
+    if game and horror:
+        play = f"Playing {game} and absolutely not handling it well."
+    elif game:
+        play = f"Playing {game}. Bring snacks and bad decisions."
+    else:
+        play = "Come hang out and cause some trouble."
+    body = f"{opener}\n\n{title}\n{play}\n\n"
+    tags = hashtags(game, horror)
+    fb = f"🔴 {body}Come hang out on Twitch: https://{LINK}\n\n{tags}"
+    ig = f"🔴 {body}Watch LIVE on Twitch: {LINK} (link in bio)\n\n{tags}"
     return fb, ig
 
 
@@ -119,7 +159,7 @@ def main():
         return
     state = load_state()
     sid = stream["id"]
-    title, game = stream.get("title") or "Live now", stream.get("game_name") or "something scary"
+    title, game = stream.get("title") or "Live now", find_game(stream)
     thumb = (stream.get("thumbnail_url", "").replace("{width}", "1280").replace("{height}", "720")
              + f"?t={int(time.time())}")
     fb_cap, ig_cap = captions(title, game)
