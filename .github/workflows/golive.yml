@@ -1,0 +1,45 @@
+name: GoLive
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "1 = only show the posts, do not post"
+        default: "1"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: golive
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: Check Twitch and post if live
+        run: python golive.py
+        env:
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
+          TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || '0' }}
+          POST_FACEBOOK: ${{ vars.POST_FACEBOOK || '1' }}
+          POST_INSTAGRAM: ${{ vars.POST_INSTAGRAM || '1' }}
+      - name: Remember which stream was announced
+        if: always()
+        run: |
+          git config user.name "golive-bot"
+          git config user.email "golive-bot@users.noreply.github.com"
+          git add state.json || true
+          git diff --cached --quiet || (git commit -m "Update announced stream" && git pull --rebase && git push)
