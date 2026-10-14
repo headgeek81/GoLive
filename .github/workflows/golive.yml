@@ -54,6 +54,8 @@ jobs:
           DRY_RUN: ${{ github.event.inputs.dry_run || '0' }}
           POST_FACEBOOK: ${{ vars.POST_FACEBOOK || '1' }}
           POST_INSTAGRAM: ${{ vars.POST_INSTAGRAM || '1' }}
+          DASHBOARD_REPO: ${{ vars.DASHBOARD_REPO }}
+          DASHBOARD_TOKEN: ${{ secrets.DASHBOARD_TOKEN }}
       - name: Remember which stream was announced
         if: always() && steps.gate.outputs.go == 'true'
         run: |
