@@ -1,0 +1,65 @@
+name: GoLive
+
+on:
+  schedule:
+    # 7:30pm Eastern. Two lines because Eastern time shifts by an hour (daylight saving).
+    # The "gate" step below lets only the one that lands on 7pm Eastern, on Fri/Sun/Mon, actually run.
+    - cron: "30 23 * * 5,0,1"   # summer time (EDT)
+    - cron: "30 0 * * 6,1,2"    # winter time (EST)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "1 = only show the posts, do not post"
+        default: "1"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: golive
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Only run Fri, Sun and Mon around 7:30pm Eastern
+        id: gate
+        run: |
+          dow=$(TZ=America/New_York date +%u)
+          hour=$(TZ=America/New_York date +%H)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || { [ "$hour" = "19" ] && { [ "$dow" = "5" ] || [ "$dow" = "7" ] || [ "$dow" = "1" ]; }; }; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "Not 7pm Eastern on a stream day. Skipping."
+          fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == 'true'
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.go == 'true'
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+        if: steps.gate.outputs.go == 'true'
+      - name: Check Twitch and post if live
+        if: steps.gate.outputs.go == 'true'
+        run: python golive.py
+        env:
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
+          TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || '0' }}
+          POST_FACEBOOK: ${{ vars.POST_FACEBOOK || '1' }}
+          POST_INSTAGRAM: ${{ vars.POST_INSTAGRAM || '1' }}
+          DASHBOARD_REPO: ${{ vars.DASHBOARD_REPO }}
+          DASHBOARD_TOKEN: ${{ secrets.DASHBOARD_TOKEN }}
+      - name: Remember which stream was announced
+        if: always() && steps.gate.outputs.go == 'true'
+        run: |
+          git config user.name "golive-bot"
+          git config user.email "golive-bot@users.noreply.github.com"
+          git add state.json || true
+          git diff --cached --quiet || (git commit -m "Update announced stream" && git pull --rebase && git push)

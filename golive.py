@@ -18,6 +18,8 @@ STATE_FILE = Path(__file__).parent / "state.json"
 DRY_RUN = os.getenv("DRY_RUN", "0") == "1"
 POST_FACEBOOK = os.getenv("POST_FACEBOOK", "1") == "1"
 POST_INSTAGRAM = os.getenv("POST_INSTAGRAM", "1") == "1"
+DASHBOARD_REPO = os.getenv("DASHBOARD_REPO", "")
+DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
 COOLDOWN_HOURS = float(os.getenv("COOLDOWN_HOURS", "3"))  # a dropped stream that restarts will not re-post
 
 # Games that get the scary treatment. Anything else gets a general gaming post.
@@ -148,6 +150,36 @@ def save_state(state):
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
+
+def push_dashboard(state):
+    """Publish the recent check history to the public dashboard (optional)."""
+    if not (DASHBOARD_REPO and DASHBOARD_TOKEN):
+        return
+    import base64
+    try:
+        url = f"https://api.github.com/repos/{DASHBOARD_REPO}/contents/golive.json"
+        hdr = {"Authorization": f"Bearer {DASHBOARD_TOKEN}", "Accept": "application/vnd.github+json"}
+        cur = requests.get(url, headers=hdr, timeout=30)
+        body = {"message": "GoLive: update checks",
+                "content": base64.b64encode(json.dumps({"generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                                        "checks": state.get("checks", [])}, indent=1).encode()).decode()}
+        if cur.status_code == 200:
+            body["sha"] = cur.json()["sha"]
+        check(requests.put(url, headers=hdr, json=body, timeout=60))
+        print("Dashboard updated.")
+    except Exception as e:
+        print(f"(dashboard update skipped: {re.sub(r'EAA[A-Za-z0-9_-]{20,}', '[removed]', str(e))[:200]})")
+
+
+def record_check(state, stream, game="", results=None):
+    chk = {"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "live": bool(stream)}
+    if stream:
+        chk.update(title=stream.get("title", ""), game=game, **(results or {}))
+    state["checks"] = (state.get("checks", []) + [chk])[-30:]
+    save_state(state)
+    push_dashboard(state)
+
+
 def main():
     stream = live_stream() if not (DRY_RUN and not os.getenv("TWITCH_CLIENT_ID")) else None
     if not stream and DRY_RUN:
@@ -156,6 +188,8 @@ def main():
         print("Not live right now, showing a sample of what would be posted.")
     if not stream:
         print(f"{LOGIN} is offline. Nothing to do.")
+        if not DRY_RUN:
+            record_check(load_state(), None)
         return
     state = load_state()
     sid = stream["id"]
@@ -173,10 +207,11 @@ def main():
         if last and (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() < COOLDOWN_HOURS * 3600:
             print("Already announced a stream recently (probably a reconnect). Skipping.")
             state.update({"stream_id": sid, "facebook": "skipped", "instagram": "skipped"})
-            save_state(state)
+            record_check(state, stream, game, {"facebook": "skipped", "instagram": "skipped"})
             return
-        state = {"stream_id": sid, "announced_at": datetime.now(timezone.utc).isoformat()}
+        state = {"checks": state.get("checks", []), "stream_id": sid, "announced_at": datetime.now(timezone.utc).isoformat()}
     print(f"LIVE: {title} ({game}). stream id {sid}")
+    failed = set()
     for name, on, fn in (("facebook", POST_FACEBOOK, lambda: post_facebook(fb_cap)),
                          ("instagram", POST_INSTAGRAM, lambda: post_instagram(ig_cap, thumb))):
         if not on or state.get(name):
@@ -186,8 +221,11 @@ def main():
             print(f"  {name}: posted ({state[name]})")
         except Exception as e:
             print(f"  {name}: FAILED ({e}). Will retry on the next check.")
+            failed.add(name)
         save_state(state)
-    save_state(state)
+    results = {n: ("failed" if n in failed else "skipped" if state.get(n) == "skipped" else "posted" if state.get(n) else "off")
+               for n in ("facebook", "instagram")}
+    record_check(state, stream, game, results)
 
 
 if __name__ == "__main__":
