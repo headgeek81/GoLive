@@ -2,10 +2,12 @@ name: GoLive
 
 on:
   schedule:
-    # 7:30pm Eastern. Two lines because Eastern time shifts by an hour (daylight saving).
-    # The "gate" step below lets only the one that lands on 7pm Eastern, on Fri/Sun/Mon, actually run.
-    - cron: "30 23 * * 5,0,1"   # summer time (EDT)
-    - cron: "30 0 * * 6,1,2"    # winter time (EST)
+    # Checks every 15 minutes from 12pm Eastern until midnight, Fri, Sat, Sun and Mon.
+    # Two blocks because Eastern time shifts by an hour (daylight saving) and late evening Eastern is
+    # already the next day in UTC. The "gate" step below lets only the checks that really fall
+    # between 12pm and midnight Eastern on those four days actually run.
+    - cron: "*/15 16-23 * * 5,6,0,1"   # 12pm-8pm EDT (also covers EST) on Fri, Sat, Sun, Mon (UTC day)
+    - cron: "*/15 0-4 * * 6,0,1,2"     # the rest of the evening, which is the next day in UTC
   workflow_dispatch:
     inputs:
       dry_run:
@@ -23,16 +25,16 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     steps:
-      - name: Only run Fri, Sun and Mon around 7:30pm Eastern
+      - name: Only run 12pm to midnight Eastern on Fri, Sat, Sun and Mon
         id: gate
         run: |
           dow=$(TZ=America/New_York date +%u)
           hour=$(TZ=America/New_York date +%H)
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || { [ "$hour" = "19" ] && { [ "$dow" = "5" ] || [ "$dow" = "7" ] || [ "$dow" = "1" ]; }; }; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || { [ $((10#$hour)) -ge 12 ] && { [ "$dow" = "5" ] || [ "$dow" = "6" ] || [ "$dow" = "7" ] || [ "$dow" = "1" ]; }; }; then
             echo "go=true" >> "$GITHUB_OUTPUT"
           else
             echo "go=false" >> "$GITHUB_OUTPUT"
-            echo "Not 7pm Eastern on a stream day. Skipping."
+            echo "Outside 12pm-midnight Eastern on Fri/Sat/Sun/Mon. Skipping."
           fi
       - uses: actions/checkout@v4
         if: steps.gate.outputs.go == 'true'
@@ -51,6 +53,7 @@ jobs:
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IG_PAGE_TOKEN: ${{ secrets.IG_PAGE_TOKEN }}
           DRY_RUN: ${{ github.event.inputs.dry_run || '0' }}
           POST_FACEBOOK: ${{ vars.POST_FACEBOOK || '1' }}
           POST_INSTAGRAM: ${{ vars.POST_INSTAGRAM || '1' }}
