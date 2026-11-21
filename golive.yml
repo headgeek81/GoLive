@@ -2,12 +2,9 @@ name: GoLive
 
 on:
   schedule:
-    # Checks every 15 minutes from 12pm Eastern until midnight, Fri, Sat, Sun and Mon.
-    # Two blocks because Eastern time shifts by an hour (daylight saving) and late evening Eastern is
-    # already the next day in UTC. The "gate" step below lets only the checks that really fall
-    # between 12pm and midnight Eastern on those four days actually run.
-    - cron: "*/15 16-23 * * 5,6,0,1"   # 12pm-8pm EDT (also covers EST) on Fri, Sat, Sun, Mon (UTC day)
-    - cron: "*/15 0-4 * * 6,0,1,2"     # the rest of the evening, which is the next day in UTC
+    # A new watcher is queued every 2 hours, around the clock. Each one checks Twitch every 2 minutes for almost
+    # 6 hours, so one late or missed start never leaves a gap, and surprise streams on any day are caught.
+    - cron: "7 */2 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -24,28 +21,14 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-24.04
+    timeout-minutes: 355
     steps:
-      - name: Only run 12pm to midnight Eastern on Fri, Sat, Sun and Mon
-        id: gate
-        run: |
-          dow=$(TZ=America/New_York date +%u)
-          hour=$(TZ=America/New_York date +%H)
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || { [ $((10#$hour)) -ge 12 ] && { [ "$dow" = "5" ] || [ "$dow" = "6" ] || [ "$dow" = "7" ] || [ "$dow" = "1" ]; }; }; then
-            echo "go=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "go=false" >> "$GITHUB_OUTPUT"
-            echo "Outside 12pm-midnight Eastern on Fri/Sat/Sun/Mon. Skipping."
-          fi
       - uses: actions/checkout@v4
-        if: steps.gate.outputs.go == 'true'
       - uses: actions/setup-python@v5
-        if: steps.gate.outputs.go == 'true'
         with:
           python-version: "3.12"
       - run: pip install requests
-        if: steps.gate.outputs.go == 'true'
-      - name: Check Twitch and post if live
-        if: steps.gate.outputs.go == 'true'
+      - name: Watch Twitch and post when live
         run: python golive.py
         env:
           TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
@@ -55,14 +38,16 @@ jobs:
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
           IG_PAGE_TOKEN: ${{ secrets.IG_PAGE_TOKEN }}
           DRY_RUN: ${{ github.event.inputs.dry_run || '0' }}
+          LOOP_MINUTES: ${{ github.event_name == 'schedule' && '345' || '0' }}
+          CHECK_SECONDS: ${{ vars.CHECK_SECONDS || '120' }}
           POST_FACEBOOK: ${{ vars.POST_FACEBOOK || '1' }}
           POST_INSTAGRAM: ${{ vars.POST_INSTAGRAM || '1' }}
           DASHBOARD_REPO: ${{ vars.DASHBOARD_REPO }}
           DASHBOARD_TOKEN: ${{ secrets.DASHBOARD_TOKEN }}
       - name: Remember which stream was announced
-        if: always() && steps.gate.outputs.go == 'true'
+        if: always()
         run: |
           git config user.name "golive-bot"
           git config user.email "golive-bot@users.noreply.github.com"
           git add state.json || true
-          git diff --cached --quiet || (git commit -m "Update announced stream" && git pull --rebase && git push)
+          git diff --cached --quiet || (git commit -m "Update announced stream" && git pull --rebase --autostash -X theirs && git push)
