@@ -1,9 +1,11 @@
 """GoLive: when headgeek81 goes live on Twitch, post once to the Facebook Page and Instagram.
-Meant to run every 5 minutes on GitHub Actions. Posts once per stream, never twice."""
+Runs on GitHub Actions and keeps watching Twitch for hours (every 2 minutes), so it does not depend on GitHub starting it on time.
+Posts once per stream, never twice."""
 import json
 import os
 import random
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -20,6 +22,8 @@ POST_FACEBOOK = os.getenv("POST_FACEBOOK", "1") == "1"
 POST_INSTAGRAM = os.getenv("POST_INSTAGRAM", "1") == "1"
 DASHBOARD_REPO = os.getenv("DASHBOARD_REPO", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
+LOOP_MINUTES = float(os.getenv("LOOP_MINUTES", "0"))   # >0: keep checking every CHECK_SECONDS for this long
+CHECK_SECONDS = int(os.getenv("CHECK_SECONDS", "120"))
 COOLDOWN_HOURS = float(os.getenv("COOLDOWN_HOURS", "3"))  # a dropped stream that restarts will not re-post
 
 # Games that get the scary treatment. Anything else gets a general gaming post.
@@ -93,12 +97,18 @@ def captions(title, game):
     return fb, ig
 
 
+_TOKEN = {"v": "", "t": 0.0}
+
+
 def twitch_token():
+    if _TOKEN["v"] and time.time() - _TOKEN["t"] < 3000:
+        return _TOKEN["v"]
     r = requests.post("https://id.twitch.tv/oauth2/token", timeout=30, data={
         "client_id": os.environ["TWITCH_CLIENT_ID"], "client_secret": os.environ["TWITCH_CLIENT_SECRET"],
         "grant_type": "client_credentials"})
     r.raise_for_status()
-    return r.json()["access_token"]
+    _TOKEN.update(v=r.json()["access_token"], t=time.time())
+    return _TOKEN["v"]
 
 
 def live_stream():
@@ -228,5 +238,52 @@ def main():
     record_check(state, stream, game, results)
 
 
+def commit_state():
+    """Save state.json to the repo right away, so a restarted job can never announce the same stream twice."""
+    if os.getenv("GITHUB_ACTIONS") != "true" or DRY_RUN:
+        return
+    try:
+        run = lambda *a: subprocess.run(a, check=True, capture_output=True, text=True)
+        run("git", "config", "user.name", "golive-bot")
+        run("git", "config", "user.email", "golive-bot@users.noreply.github.com")
+        run("git", "add", "state.json")
+        if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode != 0:
+            run("git", "commit", "-m", "Update announced stream")
+            for _ in range(3):
+                if subprocess.run("git pull --rebase --autostash -X theirs && git push", shell=True,
+                                  capture_output=True).returncode == 0:
+                    break
+                time.sleep(3)
+    except Exception as e:
+        print(f"(could not save state yet: {str(e)[:120]})")
+
+
+def watch():
+    """Check Twitch every CHECK_SECONDS until LOOP_MINUTES are up. Only does real work when something changed."""
+    end = time.time() + LOOP_MINUTES * 60
+    first, tries = True, {}
+    print(f"Watching Twitch every {CHECK_SECONDS}s for {LOOP_MINUTES:.0f} minutes.")
+    while True:
+        try:
+            state = load_state()
+            stream = live_stream()
+            if stream:
+                sid = stream["id"]
+                done = state.get("stream_id") == sid and all(
+                    state.get(n) for n, on in (("facebook", POST_FACEBOOK), ("instagram", POST_INSTAGRAM)) if on)
+                if not done and tries.get(sid, 0) < 10:
+                    tries[sid] = tries.get(sid, 0) + 1
+                    main()
+                    commit_state()
+            elif first:
+                main()  # records one "offline" line on the dashboard
+        except Exception as e:
+            print(f"(check failed: {re.sub(r'EAA[A-Za-z0-9_-]{20,}', '[removed]', str(e))[:200]})")
+        first = False
+        if time.time() + CHECK_SECONDS >= end:
+            break
+        time.sleep(CHECK_SECONDS)
+
+
 if __name__ == "__main__":
-    main()
+    watch() if LOOP_MINUTES > 0 and not DRY_RUN else main()
