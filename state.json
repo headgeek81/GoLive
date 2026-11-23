@@ -67,10 +67,22 @@
     {
       "at": "2026-11-22T12:31:19Z",
       "live": false
+    },
+    {
+      "at": "2026-11-22T20:42:21Z",
+      "live": false
+    },
+    {
+      "at": "2026-11-23T00:00:53Z",
+      "live": true,
+      "title": "**DROPS** GTA VI Road to Affiliate JOIN",
+      "game": "Grand Theft Auto VI",
+      "facebook": "posted",
+      "instagram": "posted"
     }
   ],
-  "stream_id": "322541283547",
-  "announced_at": "2026-11-22T02:50:46.683670+00:00",
-  "facebook": "1110343218827684_122119384340344726",
-  "instagram": "18181471843403587"
+  "stream_id": "322376388697",
+  "announced_at": "2026-11-23T00:00:34.992538+00:00",
+  "facebook": "1110343218827684_122119437044344726",
+  "instagram": "18130239455304641"
 }
